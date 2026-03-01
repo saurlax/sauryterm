@@ -1,7 +1,13 @@
+<script setup lang="ts">
+const colorMode = useColorMode();
+colorMode.preference = "dark";
+</script>
+
 <template>
   <UApp>
-    <Xterm />
-    <UButton>Click me</UButton>
+    <NuxtLayout>
+      <NuxtPage />
+    </NuxtLayout>
   </UApp>
 </template>
 

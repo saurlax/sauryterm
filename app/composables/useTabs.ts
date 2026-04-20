@@ -1,13 +1,13 @@
 import type { NavigationMenuItem } from "@nuxt/ui";
-import { Process as ProcessClient } from "~/utils/process";
+import { Pty as PtyClient } from "~/utils/pty";
 
 type TabItems = NavigationMenuItem[];
-type ProcessOptions = ConstructorParameters<typeof ProcessClient>[0];
+type PtyOptions = ConstructorParameters<typeof PtyClient>[0];
 
 export default function useTabs() {
   const tabs = useState<Tab[]>("tabs", () => []);
   const activeTab = useState<string | undefined>(
-    "active-process-tab",
+    "active-pty-tab",
     () => undefined,
   );
 
@@ -19,24 +19,24 @@ export default function useTabs() {
     })),
   );
 
-  async function openTab(options: ProcessOptions & { title?: string } = {}) {
-    const process = new ProcessClient({
-      command: options.command ?? "cmd.exe",
+  async function openTab(options: PtyOptions & { title?: string } = {}) {
+    const pty = new PtyClient({
+      command: options.command,
       args: options.args,
     });
-    await process.open();
+    await pty.open();
 
     const tab: TerminalTab = {
-      id: process.termId,
-      title: options.title ?? "cmd",
+      id: pty.ptyId,
+      title: options.title ?? options.command ?? "shell",
       type: "terminal",
-      to: `/terminal?termId=${process.termId}`,
-      process,
+      to: `/terminal?ptyId=${pty.ptyId}`,
+      pty,
     };
 
     tabs.value.push(tab);
-    activeTab.value = process.termId;
-    return process;
+    activeTab.value = pty.ptyId;
+    return pty;
   }
 
   function openPageTab(to: string, title: string) {
@@ -66,24 +66,24 @@ export default function useTabs() {
     return openOrFocusPageTab("/settings", "Settings");
   }
 
-  async function closeTab(termId: string | undefined = activeTab.value) {
-    if (!termId) {
+  async function closeTab(ptyId: string | undefined) {
+    if (!ptyId) {
       return;
     }
 
-    const tab = tabs.value.find((item) => item.id === termId);
-    if (tab?.type === "terminal" && tab.process) {
-      await tab.process.close();
+    const tab = tabs.value.find((item) => item.id === ptyId);
+    if (tab?.type === "terminal" && tab.pty) {
+      await tab.pty.close();
     }
 
-    const index = tabs.value.findIndex((item) => item.id === termId);
+    const index = tabs.value.findIndex((item) => item.id === ptyId);
     if (index === -1) {
       return;
     }
 
     tabs.value.splice(index, 1);
 
-    if (activeTab.value === termId) {
+    if (activeTab.value === ptyId) {
       const next = tabs.value[index] ?? tabs.value[index - 1];
       activeTab.value = next?.id;
     }

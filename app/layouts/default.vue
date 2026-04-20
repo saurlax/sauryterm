@@ -1,17 +1,40 @@
 <script setup lang="ts">
 const route = useRoute();
 const router = useRouter();
-const { tabItems, tabs, activeTab, openTab, openSettingsTab, closeTab } =
-  useTabs();
+const { tabs, activeTab, openTab, openSettingsTab, closeTab } = useTabs();
+
+function isTerminalTabActive(tab: Tab) {
+  return route.path === "/terminal" && route.query.ptyId === tab.id;
+}
+
+function isPageTabActive(tab: Tab) {
+  return route.fullPath === tab.to;
+}
 
 const navigationItems = computed(() => [
   [
-    ...tabItems.value,
-    {
-      icon: "i-lucide-plus",
-      value: "__add",
+    ...tabs.value.map((tab) => ({
+      label: tab.title,
+      value: tab.id,
+      active:
+        tab.type === "terminal"
+          ? isTerminalTabActive(tab)
+          : isPageTabActive(tab),
       onSelect: (event: Event) => {
         event.preventDefault();
+        if (route.fullPath === tab.to) {
+          activeTab.value = tab.id;
+          return;
+        }
+        activeTab.value = tab.id;
+        void router.push(tab.to);
+      },
+    })),
+    {
+      icon: "i-lucide-plus",
+      onSelect: (event: Event) => {
+        event.preventDefault();
+        event.stopPropagation();
         void onAddTab();
       },
     },
@@ -19,9 +42,9 @@ const navigationItems = computed(() => [
   [
     {
       icon: "i-lucide-settings",
-      value: "__settings",
       onSelect: (event: Event) => {
         event.preventDefault();
+        event.stopPropagation();
         onOpenSettings();
       },
     },
@@ -36,22 +59,18 @@ watch(
   { immediate: true },
 );
 
-watch(
-  activeTab,
-  (tabId) => {
-    if (!tabId) {
-      return;
-    }
+watch(activeTab, (tabId) => {
+  if (!tabId) {
+    return;
+  }
 
-    const tab = tabs.value.find((item) => item.id === tabId);
-    if (!tab || route.fullPath === tab.to) {
-      return;
-    }
+  const tab = tabs.value.find((item) => item.id === tabId);
+  if (!tab || route.fullPath === tab.to) {
+    return;
+  }
 
-    void router.push(tab.to);
-  },
-  { immediate: true },
-);
+  void router.push(tab.to);
+});
 
 async function onAddTab() {
   await openTab({ command: "cmd.exe", title: "cmd" });
@@ -69,6 +88,15 @@ async function onCloseTab(tabId: string | undefined) {
   await closeTab(tabId);
 }
 
+function getItemValue(item: unknown) {
+  if (!item || typeof item !== "object" || !("value" in item)) {
+    return undefined;
+  }
+
+  const value = (item as { value?: unknown }).value;
+  return typeof value === "string" ? value : undefined;
+}
+
 function isClosable(value: string | undefined) {
   if (!value) {
     return false;
@@ -79,21 +107,18 @@ function isClosable(value: string | undefined) {
 
 <template>
   <div class="flex h-screen flex-col overflow-hidden">
-    <UNavigationMenu
-      v-model="activeTab"
-      :items="navigationItems"
-      highlight
-      variant="link"
-    >
+    <UNavigationMenu :items="navigationItems" variant="link" highlight>
       <template #item-trailing="{ item }">
         <UButton
-          v-if="isClosable(item.value)"
+          v-if="isClosable(getItemValue(item))"
           icon="i-lucide-x"
           color="neutral"
           variant="ghost"
           size="xs"
+          type="button"
           aria-label="Close tab"
-          @click.stop="onCloseTab(item.value)"
+          @mousedown.stop.prevent
+          @click.stop.prevent="onCloseTab(getItemValue(item))"
         />
       </template>
     </UNavigationMenu>

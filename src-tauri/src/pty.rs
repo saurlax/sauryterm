@@ -3,52 +3,53 @@ use std::{
     io::{Read, Write},
     sync::{Arc, Mutex},
     thread,
+    time::Duration,
 };
 use portable_pty::{native_pty_system, Child, CommandBuilder, PtySize};
 use tauri::{AppHandle, Emitter, State};
 
 #[derive(Clone)]
-struct TerminalSession {
+struct PtySession {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Arc<Mutex<Box<dyn Child + Send>>>,
 }
 
 #[derive(Clone, Default)]
-pub struct TerminalState {
-    sessions: Arc<Mutex<HashMap<String, TerminalSession>>>,
+pub struct PtyState {
+    sessions: Arc<Mutex<HashMap<String, PtySession>>>,
 }
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TermDataEvent {
-    term_id: String,
+struct PtyDataEvent {
+    pty_id: String,
     data: String,
 }
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TermExitEvent {
-    term_id: String,
+struct PtyExitEvent {
+    pty_id: String,
     code: Option<i32>,
 }
 
-fn emit_data(app: &AppHandle, term_id: &str, data: String) {
-    let payload = TermDataEvent {
-        term_id: term_id.to_string(),
+fn emit_data(app: &AppHandle, pty_id: &str, data: String) {
+    let payload = PtyDataEvent {
+        pty_id: pty_id.to_string(),
         data,
     };
-    let _ = app.emit("term://data", payload);
+    let _ = app.emit("pty://data", payload);
 }
 
 #[tauri::command]
-pub fn open_term(
+pub fn open_pty(
     app: AppHandle,
-    state: State<TerminalState>,
-    term_id: Option<String>,
+    state: State<PtyState>,
+    pty_id: Option<String>,
     command: Option<String>,
     args: Option<Vec<String>>,
 ) -> Result<String, String> {
-    let term_id = term_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let pty_id = pty_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let pty_system = native_pty_system();
     let pty_pair = pty_system
@@ -89,7 +90,7 @@ pub fn open_term(
         .take_writer()
         .map_err(|err| format!("failed to take pty writer: {err}"))?;
 
-    let session = TerminalSession {
+    let session = PtySession {
         writer: Arc::new(Mutex::new(writer)),
         child: Arc::new(Mutex::new(child)),
     };
@@ -98,18 +99,19 @@ pub fn open_term(
         .sessions
         .lock()
         .map_err(|_| "failed to lock terminal sessions".to_string())?
-        .insert(term_id.clone(), session.clone());
+        .insert(pty_id.clone(), session.clone());
 
     {
         let app = app.clone();
-        let term_id = term_id.clone();
+        let pty_id = pty_id.clone();
         thread::spawn(move || {
             let mut buf = [0_u8; 4096];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(len) => {
-                        emit_data(&app, &term_id, String::from_utf8_lossy(&buf[..len]).into_owned())
+                        let chunk = String::from_utf8_lossy(&buf[..len]).into_owned();
+                        emit_data(&app, &pty_id, chunk)
                     }
                     Err(_) => break,
                 }
@@ -119,34 +121,46 @@ pub fn open_term(
 
     {
         let app = app.clone();
-        let term_id = term_id.clone();
+        let pty_id = pty_id.clone();
         let sessions = Arc::clone(&state.sessions);
         let child = Arc::clone(&session.child);
         thread::spawn(move || {
-            let status = child.lock().ok().and_then(|mut child| child.wait().ok());
-            if let Ok(mut sessions) = sessions.lock() {
-                sessions.remove(&term_id);
+            loop {
+                let status = child
+                    .lock()
+                    .ok()
+                    .and_then(|mut child| child.try_wait().ok())
+                    .flatten();
+
+                if let Some(status) = status {
+                    if let Ok(mut sessions) = sessions.lock() {
+                        sessions.remove(&pty_id);
+                    }
+                    let payload = PtyExitEvent {
+                        pty_id: pty_id.clone(),
+                        code: i32::try_from(status.exit_code()).ok(),
+                    };
+                    let _ = app.emit("pty://exit", payload);
+                    break;
+                }
+
+                thread::sleep(Duration::from_millis(50));
             }
-            let payload = TermExitEvent {
-                term_id: term_id.clone(),
-                code: status.and_then(|s| i32::try_from(s.exit_code()).ok()),
-            };
-            let _ = app.emit("term://exit", payload);
         });
     }
 
-    Ok(term_id)
+    Ok(pty_id)
 }
 
 #[tauri::command]
-pub fn write_term(state: State<TerminalState>, term_id: String, data: String) -> Result<(), String> {
+pub fn write_pty(state: State<PtyState>, pty_id: String, data: String) -> Result<(), String> {
     let session = state
         .sessions
         .lock()
         .map_err(|_| "failed to lock terminal sessions".to_string())?
-        .get(&term_id)
+        .get(&pty_id)
         .cloned()
-        .ok_or_else(|| format!("terminal session not found: {term_id}"))?;
+        .ok_or_else(|| format!("terminal session not found: {pty_id}"))?;
 
     let mut writer = session
         .writer
@@ -162,12 +176,12 @@ pub fn write_term(state: State<TerminalState>, term_id: String, data: String) ->
 }
 
 #[tauri::command]
-pub fn close_term(state: State<TerminalState>, term_id: String) -> Result<(), String> {
+pub fn close_pty(state: State<PtyState>, pty_id: String) -> Result<(), String> {
     let session = state
         .sessions
         .lock()
         .map_err(|_| "failed to lock terminal sessions".to_string())?
-        .remove(&term_id);
+        .remove(&pty_id);
 
     if let Some(session) = session {
         if let Ok(mut child) = session.child.lock() {

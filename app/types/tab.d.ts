@@ -1,9 +1,10 @@
-interface ProcessHandle {
-  termId: string;
+interface PtyHandle {
+  ptyId: string;
   command?: string;
   args?: string[];
   open(): Promise<void>;
   send(data: string): Promise<void>;
+  getContext(): string;
   onData(handler: (data: string) => void): () => void;
   onExit(handler: (code: number | null) => void): () => void;
   close(): Promise<void>;
@@ -15,10 +16,10 @@ interface Tab {
   title: string;
   type: "terminal" | "page";
   to: string;
-  process?: ProcessHandle;
+  pty?: PtyHandle;
 }
 
 interface TerminalTab extends Tab {
   type: "terminal";
-  process: ProcessHandle;
+  pty: PtyHandle;
 }
